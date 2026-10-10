@@ -1,0 +1,15 @@
+.env
+.venv/
+.worktrees/
+__pycache__/
+*.py[cod]
+
+# Local catalogs, lyrics, and generated datasets
+data/**
+
+# Private model weights and training outputs
+checkpoints/
+runs/
+*.pt
+*.pth
+*.safetensors

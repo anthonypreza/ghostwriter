@@ -1,0 +1,28 @@
+[project]
+name = "ghostwriter"
+version = "0.1.0"
+description = "An educational PyTorch project for original lyric generation"
+readme = "README.md"
+authors = [
+    { name = "Anthony Preza", email = "apreza.95@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "dotenv>=0.9.9",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "playwright>=1.63.0",
+    "polars>=2.0.0",
+    "requests>=2.34.2",
+    "scikit-learn>=1.9.1",
+    "torch>=2.14.1",
+]
+
+[project.scripts]
+ghostwriter = "ghostwriter:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
