@@ -1,0 +1,61 @@
+[project]
+name = "ghostwriter-amd-environment"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "ghostwriter",
+    "torch[device-gfx1100]==2.12.0+rocm7.14.1",
+    # Keep general dependencies on PyPI, rather than AMD's older mirror.
+    "beautifulsoup4",
+    "dotenv",
+    "fastapi",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "playwright",
+    "requests",
+    "scikit-learn",
+    "tokenizers",
+    "uvicorn",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+
+[tool.uv.sources]
+ghostwriter = { path = "../..", editable = true }
+torch = { url = "https://repo.amd.com/rocm/whl-multi-arch/torch-2.12.0%2Brocm7.14.1-cp312-cp312-win_amd64.whl" }
+
+[[tool.uv.index]]
+name = "amd-rocm"
+url = "https://repo.amd.com/rocm/whl-multi-arch/"
+ignore-error-codes = [403]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
+[tool.uv.sources.beautifulsoup4]
+index = "pypi"
+[tool.uv.sources.dotenv]
+index = "pypi"
+[tool.uv.sources.matplotlib]
+index = "pypi"
+[tool.uv.sources.numpy]
+index = "pypi"
+[tool.uv.sources.pandas]
+index = "pypi"
+[tool.uv.sources.playwright]
+index = "pypi"
+[tool.uv.sources.requests]
+index = "pypi"
+[tool.uv.sources.scikit-learn]
+index = "pypi"
+[tool.uv.sources.tokenizers]
+index = "pypi"
+[tool.uv.sources.fastapi]
+index = "pypi"
+[tool.uv.sources.uvicorn]
+index = "pypi"
