@@ -1,5 +1,7 @@
 .env
+.gpu-device
 .venv/
+.venv-cpu/
 .worktrees/
 __pycache__/
 *.py[cod]

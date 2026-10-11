@@ -10,7 +10,13 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from ..data.dataset import LyricsDataset
-from .checkpoint import DEFAULT_CHECKPOINT, DEFAULT_TOKENIZER, PROJECT_ROOT, load_model, resolve_context_length
+from .checkpoint import (
+    DEFAULT_CHECKPOINT,
+    DEFAULT_TOKENIZER,
+    PROJECT_ROOT,
+    load_model,
+    resolve_context_length,
+)
 
 
 @torch.inference_mode()

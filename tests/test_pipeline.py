@@ -53,6 +53,25 @@ class PipelineTests(unittest.TestCase):
                     "gru",
                     "--model-config",
                     str(model_config),
+                    "--embedding-size",
+                    "12",
+                    "--hidden-size",
+                    "16",
+                    "--dropout",
+                    "0.2",
+                    "--no-section-tokens",
+                    "--learning-rate",
+                    "0.002",
+                    "--weight-decay",
+                    "0.05",
+                    "--lr-scheduler",
+                    "plateau",
+                    "--lr-factor",
+                    "0.25",
+                    "--lr-patience",
+                    "1",
+                    "--min-lr",
+                    "0.00001",
                 ],
                 capture_output=True,
                 text=True,
@@ -80,10 +99,25 @@ class PipelineTests(unittest.TestCase):
                     metrics["evaluation"][split]["target_tokens"], expected_targets
                 )
             model, _ = load_model(run / "best_gru.pt", run / "tokenizer.json")
-            self.assertEqual(model.embedding.embedding_dim, 8)
-            self.assertEqual(model.gru.hidden_size, 12)
+            self.assertEqual(model.embedding.embedding_dim, 12)
+            self.assertEqual(model.gru.hidden_size, 16)
+            self.assertEqual(model.dropout.p, 0.2)
+            self.assertFalse(tokenizer.section_tokens)
             self.assertEqual(model.context_length, 8)
             self.assertTrue((run / "config.json").exists())
+            config = json.loads((run / "config.json").read_text())
+            for key, expected in (("learning_rate", 0.002), ("weight_decay", 0.05)):
+                self.assertEqual(config[key], expected)
+                self.assertEqual(config["training_settings"][key], expected)
+            for key, expected in (
+                ("lr_scheduler", "plateau"),
+                ("lr_factor", 0.25),
+                ("lr_patience", 1),
+                ("min_lr", 0.00001),
+            ):
+                self.assertEqual(config["training_settings"][key], expected)
+            history = json.loads((run / "history.json").read_text())
+            self.assertEqual(history["learning_rate"], [0.002])
             self.assertTrue((run / "history.json").exists())
             self.assertIn("[4/4]", (run / "pipeline.log").read_text())
             # A second invocation cannot overwrite a previous run.
@@ -121,6 +155,23 @@ class PipelineTests(unittest.TestCase):
                 (run / "pipeline.log").read_text(),
             )
             self.assertFalse((run / "metrics.json").exists())
+
+    def test_invalid_optimizer_settings_fail_before_data_preparation(self):
+        for option, value in (
+            ("--learning-rate", "0"),
+            ("--learning-rate", "nan"),
+            ("--weight-decay", "-0.1"),
+            ("--weight-decay", "inf"),
+        ):
+            with (
+                self.subTest(option=option, value=value),
+                patch.object(sys, "argv", ["pipeline", option, value]),
+                patch.object(pipeline, "prepare_corpus") as prepare,
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    pipeline.main()
+                self.assertEqual(error.exception.code, 2)
+                prepare.assert_not_called()
 
 
 if __name__ == "__main__":

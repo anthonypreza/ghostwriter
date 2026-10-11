@@ -6,19 +6,26 @@ readme = "README.md"
 authors = [
     { name = "Anthony Preza", email = "apreza.95@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "beautifulsoup4>=4.15.0",
     "dotenv>=0.9.9",
+    "fastapi>=0.115,<1",
     "matplotlib>=3.11.2",
     "numpy>=2.5.3",
     "pandas>=3.0.6",
     "playwright>=1.63.0",
-    "polars>=2.0.0",
+    "plotly>=7.1.0",
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
-    "torch>=2.14.1",
+    "tokenizers>=0.23.3",
+    "torch>=2.12,<2.13",
+    "umap-learn>=0.5.12",
+    "uvicorn>=0.30,<1",
 ]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1"]
 
 [project.scripts]
 ghostwriter = "ghostwriter:main"
@@ -26,3 +33,12 @@ ghostwriter = "ghostwriter:main"
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
 build-backend = "uv_build"
+
+# Use CPU wheels on Windows/Linux and the standard PyPI wheel on macOS.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }

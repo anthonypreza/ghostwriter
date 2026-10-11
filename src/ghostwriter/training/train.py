@@ -1,5 +1,5 @@
-import math
 import json
+import math
 import time
 from pathlib import Path
 
@@ -9,17 +9,72 @@ from torch.utils.data import DataLoader
 
 from ..data.dataset import LyricsDataset
 from ..data.tokenizer import Tokenizer
-from ..models.registry import build_model, add_model_arguments, read_model_config
+from ..models.registry import add_model_arguments, build_model, read_model_settings
 from .checkpoint import save_model
 
 NUM_EPOCHS = 30
 BATCH_SIZE = 32
 PATIENCE = 5
+LEARNING_RATE = 3e-4
+WEIGHT_DECAY = 0.01
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parents[2]
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 CHECKPOINT_PATH = PROJECT_ROOT / "best_gru.pt"
+
+
+def add_optimizer_arguments(parser):
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=LEARNING_RATE,
+        help="AdamW learning rate; default 0.0003.",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=WEIGHT_DECAY,
+        help="AdamW weight decay; default 0.01. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--lr-scheduler",
+        choices=("plateau", "none"),
+        default="plateau",
+        help="Reduce learning rate on stalled validation loss; default plateau.",
+    )
+    parser.add_argument("--lr-factor", type=float, default=0.5)
+    parser.add_argument(
+        "--lr-patience",
+        type=int,
+        default=2,
+        help="Plateau tolerance; reduce after this many bad epochs plus one (default 2).",
+    )
+    parser.add_argument("--min-lr", type=float, default=1e-6)
+
+
+def validate_optimizer_settings(learning_rate, weight_decay):
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("--learning-rate must be finite and greater than zero.")
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError("--weight-decay must be finite and non-negative.")
+
+
+def validate_scheduler_settings(
+    lr_scheduler, lr_factor, lr_patience, min_lr, learning_rate, patience
+):
+    if lr_scheduler not in ("plateau", "none"):
+        raise ValueError("--lr-scheduler must be plateau or none.")
+    if not math.isfinite(lr_factor) or not 0 < lr_factor < 1:
+        raise ValueError("--lr-factor must be finite and between 0 and 1.")
+    if not isinstance(lr_patience, int) or lr_patience < 0:
+        raise ValueError("--lr-patience must be a non-negative integer.")
+    if not math.isfinite(min_lr) or not 0 <= min_lr <= learning_rate:
+        raise ValueError(
+            "--min-lr must be finite, non-negative, and no greater than --learning-rate."
+        )
+    if lr_scheduler == "plateau" and lr_patience >= patience:
+        raise ValueError("--lr-patience must be less than early-stopping --patience.")
 
 
 def train(
@@ -36,12 +91,22 @@ def train(
     history_path=None,
     model_name="gru",
     model_config=None,
+    learning_rate=LEARNING_RATE,
+    weight_decay=WEIGHT_DECAY,
+    lr_scheduler="plateau",
+    lr_factor=0.5,
+    lr_patience=2,
+    min_lr=1e-6,
 ):
     """Train using only training and validation songs; return learning history."""
     import builtins
     from functools import partial
 
     print = partial(builtins.print, flush=True)
+    validate_optimizer_settings(learning_rate, weight_decay)
+    validate_scheduler_settings(
+        lr_scheduler, lr_factor, lr_patience, min_lr, learning_rate, patience
+    )
     if min(epochs, batch_size, patience, seq_len, stride) < 1:
         raise ValueError(
             "Epochs, batch size, patience, sequence length and stride must be positive."
@@ -94,11 +159,27 @@ def train(
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=1e-3,
-        weight_decay=1e-2,
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
+    scheduler = (
+        torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=lr_factor,
+            patience=lr_patience,
+            threshold=0.0,
+            threshold_mode="abs",
+            min_lr=min_lr,
+        )
+        if lr_scheduler == "plateau"
+        else None
     )
     grad_clip_norm = 1.0
     training_settings = {
+        "token_level": tokenizer.token_level,
+        "lowercase": tokenizer.lowercase,
+        "section_tokens": tokenizer.section_tokens,
         "seq_len": seq_len,
         "stride": stride,
         "batch_size": BATCH_SIZE,
@@ -108,6 +189,11 @@ def train(
         "optimizer": type(optimizer).__name__,
         "learning_rate": optimizer.param_groups[0]["lr"],
         "weight_decay": optimizer.param_groups[0]["weight_decay"],
+        "lr_scheduler": lr_scheduler,
+        "lr_factor": lr_factor,
+        "lr_patience": lr_patience,
+        "min_lr": min_lr,
+        "reset_patience_on_lr_reduction": scheduler is not None,
         "grad_clip_norm": grad_clip_norm,
         "vocab_size": len(tokenizer.id_to_token),
     }
@@ -128,6 +214,8 @@ def train(
         "train_acc": [],
         "val_loss": [],
         "val_acc": [],
+        "learning_rate": [],
+        "next_learning_rate": [],
     }
 
     def run_epoch(loader, training=True):
@@ -204,6 +292,7 @@ def train(
 
     for epoch in range(NUM_EPOCHS):
         epoch_started = time.perf_counter()
+        epoch_lr = optimizer.param_groups[0]["lr"]
         train_metrics = run_epoch(
             train_loader,
             training=True,
@@ -234,6 +323,7 @@ def train(
             f"Train Acc: {train_metrics['acc']:.2%} | "
             f"Val Acc: {val_metrics['acc']:.2%} | "
             f"Val PPL: {val_perplexity:.2f} | "
+            f"LR: {epoch_lr:.3g} | "
             f"Time: {time.perf_counter() - epoch_started:.1f}s"
         )
 
@@ -256,6 +346,19 @@ def train(
         else:
             epochs_without_improvement += 1
             print(f"  No improvement: {epochs_without_improvement}/{PATIENCE}")
+
+        if scheduler is not None:
+            scheduler.step(val_metrics["loss"])
+        next_lr = optimizer.param_groups[0]["lr"]
+        history["learning_rate"].append(epoch_lr)
+        history["next_learning_rate"].append(next_lr)
+        if next_lr < epoch_lr:
+            # Allow a full early-stopping window at the new learning rate.
+            epochs_without_improvement = 0
+            print(
+                f"  Learning rate reduced: {epoch_lr:.3g} -> {next_lr:.3g} | "
+                "Early-stopping patience reset"
+            )
 
         if history_path:
             Path(history_path).parent.mkdir(parents=True, exist_ok=True)
@@ -284,16 +387,28 @@ def main():
 
     parser = argparse.ArgumentParser(description="Train a registered language model.")
     add_model_arguments(parser)
+    add_optimizer_arguments(parser)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--epochs", type=int, default=NUM_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--seq-len", type=int, default=32)
+    parser.add_argument("--stride", type=int, default=16)
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--plot", action="store_true")
     args = parser.parse_args()
     try:
-        model_config = read_model_config(args.model_config)
+        validate_optimizer_settings(args.learning_rate, args.weight_decay)
+        validate_scheduler_settings(
+            args.lr_scheduler,
+            args.lr_factor,
+            args.lr_patience,
+            args.min_lr,
+            args.learning_rate,
+            args.patience,
+        )
+        model_config = read_model_settings(args)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     checkpoint = args.checkpoint or PROJECT_ROOT / f"best_{args.model}.pt"
@@ -303,17 +418,25 @@ def main():
         patience=args.patience,
         device_name=args.device,
         seed=args.seed,
+        seq_len=args.seq_len,
+        stride=args.stride,
         checkpoint_path=checkpoint,
         history_path=checkpoint.with_suffix(".history.json"),
         model_name=args.model,
         model_config=model_config,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        lr_scheduler=args.lr_scheduler,
+        lr_factor=args.lr_factor,
+        lr_patience=args.lr_patience,
+        min_lr=args.min_lr,
     )
     print(f"Best epoch: {result['best_epoch']} | Checkpoint: {checkpoint}")
     if args.plot:
         import matplotlib.pyplot as plt
         from matplotlib.ticker import PercentFormatter
 
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        _, axes = plt.subplots(1, 2, figsize=(12, 4))
         for ax, metric in zip(axes, ("loss", "acc")):
             for split in ("train", "val"):
                 ax.plot(

@@ -1,22 +1,27 @@
+import sys
+from contextlib import nullcontext
+
 import torch
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 class LyricsTransformer(nn.Module):
     def __init__(
         self,
         vocab_size,
-        embedding_size=128,
+        embedding_size=64,
         max_seq_len=128,
-        dropout=0.1,
+        dropout=0.2,
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_size)
         self.position_embedding = nn.Embedding(max_seq_len, embedding_size)
+
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_size,
             nhead=4,
-            dim_feedforward=512,
+            dim_feedforward=128,
             dropout=dropout,
             activation="gelu",
             batch_first=True,
@@ -25,25 +30,11 @@ class LyricsTransformer(nn.Module):
         self.transformer = nn.TransformerEncoder(
             encoder_layer=encoder_layer, num_layers=2, norm=nn.LayerNorm(embedding_size)
         )
-        for layer in self.transformer.layers:
-            if not isinstance(layer, nn.TransformerEncoderLayer):
-                continue
-
-            weight = layer.self_attn.in_proj_weight
-
-            if isinstance(weight, torch.Tensor):
-                nn.init.xavier_uniform_(weight)
-
-            for module in layer.modules():
-                if isinstance(module, nn.Linear):
-                    nn.init.xavier_uniform_(module.weight)
-                    if module.bias is not None:
-                        nn.init.zeros_(module.bias)
 
         self.dropout = nn.Dropout(dropout)
-        self.output_layer = nn.Linear(embedding_size, vocab_size)
+        self.output_layer = nn.Linear(embedding_size, vocab_size, bias=False)
 
-    def forward(self, x):
+    def forward(self, x, return_hidden=False):
         # x: (batch, sequence)
         seq_len = x.size(1)
 
@@ -60,5 +51,16 @@ class LyricsTransformer(nn.Module):
             torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device),
             diagonal=1,
         )
-        hidden = self.transformer(hidden, mask=causal_mask)  # (B, T, E)
+        # Use math attention for Windows/ROCm compatibility with training dropout.
+        attention_backend = (
+            sdpa_kernel(SDPBackend.MATH)
+            if x.is_cuda and torch.version.hip is not None and sys.platform == "win32"
+            else nullcontext()
+        )
+        with attention_backend:
+            hidden = self.transformer(hidden, mask=causal_mask)  # (B, T, E)
+
+        if return_hidden:
+            return hidden
+
         return self.output_layer(hidden)

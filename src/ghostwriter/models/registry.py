@@ -69,3 +69,39 @@ def add_model_arguments(parser):
         default=None,
         help="JSON file containing model constructor arguments (excluding vocab_size).",
     )
+    parser.add_argument(
+        "--embedding-size",
+        type=int,
+        default=None,
+        help="Embedding dimension; overrides embedding_size in --model-config.",
+    )
+    parser.add_argument(
+        "--hidden-size",
+        type=int,
+        default=None,
+        help="Recurrent hidden dimension (RNN/LSTM/GRU); overrides --model-config.",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=None,
+        help="Dropout probability from 0 to 1; overrides --model-config.",
+    )
+
+
+def read_model_settings(args):
+    config = read_model_config(args.model_config)
+    for key in ("embedding_size", "hidden_size", "dropout"):
+        value = getattr(args, key)
+        if value is None:
+            continue
+        option = "--" + key.replace("_", "-")
+        if key == "dropout":
+            if not 0 <= value <= 1:
+                raise ValueError(f"{option} must be between 0 and 1.")
+        elif value < 1:
+            raise ValueError(f"{option} must be positive.")
+        if key not in inspect.signature(MODEL_REGISTRY[args.model]).parameters:
+            raise ValueError(f"{option} is not supported by {args.model}.")
+        config[key] = value
+    return config

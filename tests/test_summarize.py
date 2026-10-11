@@ -53,6 +53,16 @@ class SummaryTests(unittest.TestCase):
             self.assertNotEqual(other_vocab["group"], a["group"])
             self.assertIn(str(root / "a" / "best_gru.pt"), a["commands"]["generate"])
             self.assertIn(str(root / "a" / "processed"), a["commands"]["evaluate"])
+            # The same token IDs can have different semantics in character mode.
+            char_path = self.make_run(root, "char", 3)
+            tokenizer_path = char_path / "tokenizer.json"
+            tokenizer_data = json.loads(tokenizer_path.read_text())
+            tokenizer_data.update(token_level="char", section_tokens=False)
+            tokenizer_path.write_text(json.dumps(tokenizer_data))
+            char_run = inspect_run(char_path)
+            self.assertNotEqual(char_run["group"], a["group"])
+            self.assertNotIn("<INTRO>", char_run["commands"]["generate"])
+            self.assertIn("--max-new-tokens 1000", char_run["commands"]["generate"])
 
     def test_missing_corrupt_and_failed_runs_are_not_ranked(self):
         with tempfile.TemporaryDirectory() as temporary:

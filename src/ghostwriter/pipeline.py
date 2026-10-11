@@ -1,25 +1,30 @@
 """Prepare songs, fit a tokenizer, train a selected model, and evaluate it."""
 
 import argparse
-from contextlib import redirect_stdout
-from datetime import datetime
 import json
-from pathlib import Path
 import re
 import sys
 import time
+from contextlib import redirect_stdout
+from datetime import datetime
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
 from .console import use_color
-from .data.dataset import LyricsDataset, SEQUENCE_LEN, STRIDE
+from .data.dataset import SEQUENCE_LEN, STRIDE, LyricsDataset
 from .data.prepare import prepare_corpus
-from .data.tokenizer import Tokenizer
-from .models.registry import add_model_arguments, read_model_config
+from .data.tokenizer import create_tokenizer
+from .models.registry import add_model_arguments, read_model_settings
 from .training.checkpoint import PROJECT_ROOT, load_model
 from .training.eval import evaluate
-from .training.train import train
+from .training.train import (
+    add_optimizer_arguments,
+    train,
+    validate_optimizer_settings,
+    validate_scheduler_settings,
+)
 
 
 class Tee:
@@ -75,7 +80,9 @@ def run_pipeline(args, run_dir):
     print(f"Ghostwriter pipeline | Run: {run_dir}\nRaw songs: {args.raw_dir}")
 
     print("\n[1/4] Prepare songs and create 80/10/10 splits (seed 42)")
-    manifest = prepare_corpus(args.raw_dir, processed)
+    manifest = prepare_corpus(
+        args.raw_dir, processed, section_tokens=args.section_tokens
+    )
     print(
         "Songs: "
         + " | ".join(
@@ -84,11 +91,12 @@ def run_pipeline(args, run_dir):
     )
 
     print("\n[2/4] Fit and save tokenizer using training songs only")
-    tokenizer = Tokenizer()
+    tokenizer = create_tokenizer(args.token_level, args.section_tokens, args.vocab_size)
     tokenizer.build_vocab(processed / "train", min_freq=args.min_freq)
     tokenizer.save(tokenizer_path)
     print(
-        f"Vocabulary: {len(tokenizer.vocab_map):,} tokens | Minimum frequency: {args.min_freq}"
+        f"Vocabulary: {len(tokenizer.vocab_map):,} tokens | Minimum frequency: {args.min_freq} | "
+        f"Token level: {args.token_level} | Section tokens: {args.section_tokens}"
     )
 
     print(
@@ -108,6 +116,12 @@ def run_pipeline(args, run_dir):
         run_dir / "history.json",
         model_name=args.model,
         model_config=args.model_settings,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        lr_scheduler=args.lr_scheduler,
+        lr_factor=args.lr_factor,
+        lr_patience=args.lr_patience,
+        min_lr=args.min_lr,
     )
     config["model_settings"] = result["model_config"]
     config["training_settings"] = result["training_settings"]
@@ -156,7 +170,9 @@ def run_pipeline(args, run_dir):
     )
     print(
         "Generate with:\npython -m ghostwriter.inference.generate "
-        f'--checkpoint "{checkpoint}" --tokenizer "{tokenizer_path}" --prompt "<INTRO>" --max-new-tokens 200 --temperature 1.1'
+        f'--checkpoint "{checkpoint}" --tokenizer "{tokenizer_path}" '
+        + ('--prompt "<INTRO>" ' if tokenizer.section_tokens else "")
+        + f"--max-new-tokens {1000 if tokenizer.token_level == 'char' else 200} --temperature 1.0 --top-k 40"
     )
     return report
 
@@ -164,6 +180,7 @@ def run_pipeline(args, run_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     add_model_arguments(parser)
+    add_optimizer_arguments(parser)
     parser.add_argument("--raw-dir", type=Path, default=PROJECT_ROOT / "data" / "raw")
     parser.add_argument(
         "--run-dir",
@@ -174,7 +191,24 @@ def main():
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--min-freq", type=int, default=2)
+    parser.add_argument(
+        "--token-level", choices=("word", "char", "bpe"), default="word"
+    )
+    parser.add_argument(
+        "--vocab-size",
+        type=int,
+        default=None,
+        help="BPE target vocabulary size; default 2000.",
+    )
+    parser.add_argument(
+        "--section-tokens", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--min-freq",
+        type=int,
+        default=None,
+        help="Default: 2 for words/BPE, 1 for characters; BPE uses this for merges.",
+    )
     parser.add_argument("--seq-len", type=int, default=SEQUENCE_LEN)
     parser.add_argument("--stride", type=int, default=STRIDE)
     parser.add_argument(
@@ -193,8 +227,20 @@ def main():
         help="Terminal colors; saved logs always remain plain text.",
     )
     args = parser.parse_args()
+    if args.min_freq is None:
+        args.min_freq = 1 if args.token_level == "char" else 2
     try:
-        args.model_settings = read_model_config(args.model_config)
+        validate_optimizer_settings(args.learning_rate, args.weight_decay)
+        validate_scheduler_settings(
+            args.lr_scheduler,
+            args.lr_factor,
+            args.lr_patience,
+            args.min_lr,
+            args.learning_rate,
+            args.patience,
+        )
+        args.model_settings = read_model_settings(args)
+        create_tokenizer(args.token_level, args.section_tokens, args.vocab_size)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     if (

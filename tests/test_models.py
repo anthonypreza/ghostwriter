@@ -10,7 +10,11 @@ from torch import nn
 from ghostwriter.data.tokenizer import Tokenizer
 from ghostwriter.inference.generate import generate
 from ghostwriter.models.registry import MODEL_REGISTRY, build_model
-from ghostwriter.training.checkpoint import load_model, save_model, resolve_context_length
+from ghostwriter.training.checkpoint import (
+    load_model,
+    save_model,
+    resolve_context_length,
+)
 
 
 class TinyLanguageModel(nn.Module):
@@ -49,7 +53,9 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(restored.context_length, 8)
             self.assertEqual(resolve_context_length(restored), 8)
             with self.assertRaisesRegex(ValueError, "trained with context length 8"):
-                generate(restored, loaded_tokenizer, context_length=16, max_new_tokens=0)
+                generate(
+                    restored, loaded_tokenizer, context_length=16, max_new_tokens=0
+                )
             self.assertIsInstance(
                 generate(restored, loaded_tokenizer, max_new_tokens=2), str
             )

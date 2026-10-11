@@ -1,7 +1,7 @@
 """Load architecture-aware checkpoints, plus legacy weights-only GRU files."""
 
-from pathlib import Path
 import json
+from pathlib import Path
 
 import torch
 
@@ -29,6 +29,30 @@ def load_model(
             raise ValueError(
                 "Checkpoint token IDs do not match the supplied tokenizer."
             )
+        tokenizer_config = {
+            "token_level": tokenizer.token_level,
+            "section_tokens": tokenizer.section_tokens,
+            "lowercase": tokenizer.lowercase,
+        }
+        saved_tokenizer_config = dict(
+            saved.get(
+                "tokenizer_config", {"token_level": "word", "section_tokens": True}
+            )
+        )
+        saved_tokenizer_config.setdefault(
+            "lowercase", saved_tokenizer_config["token_level"] == "word"
+        )
+        if tokenizer_config != saved_tokenizer_config:
+            raise ValueError(
+                "Checkpoint tokenizer settings do not match the supplied tokenizer."
+            )
+        if (
+            tokenizer.token_level == "bpe"
+            and saved.get("tokenizer_backend") != tokenizer.backend_state
+        ):
+            raise ValueError(
+                "Checkpoint BPE merges or preprocessing do not match the supplied tokenizer."
+            )
         context_length = saved["seq_len"]
     else:
         # Old GRU checkpoints contain no architecture or tokenizer metadata.
@@ -43,11 +67,17 @@ def load_model(
         run_config = Path(checkpoint_path).parent / "config.json"
         context_length = None
         if run_config.is_file():
-            context_length = json.loads(run_config.read_text(encoding="utf-8")).get("seq_len")
+            context_length = json.loads(run_config.read_text(encoding="utf-8")).get(
+                "seq_len"
+            )
     if context_length is not None and (
-        not isinstance(context_length, int) or isinstance(context_length, bool) or context_length < 1
+        not isinstance(context_length, int)
+        or isinstance(context_length, bool)
+        or context_length < 1
     ):
-        raise ValueError("Checkpoint training sequence length must be a positive integer.")
+        raise ValueError(
+            "Checkpoint training sequence length must be a positive integer."
+        )
     if vocab_size != len(tokenizer.vocab_map):
         raise ValueError("Checkpoint vocabulary size does not match the tokenizer.")
     model = build_model(name, vocab_size, config).to(device)
@@ -89,9 +119,17 @@ def save_model(model, tokenizer, path, model_name, model_config, seq_len, epoch)
             "model_name": model_name,
             "model_config": dict(model_config),
             "vocab_size": len(tokenizer.vocab_map),
+            "tokenizer_config": {
+                "token_level": tokenizer.token_level,
+                "section_tokens": tokenizer.section_tokens,
+                "lowercase": tokenizer.lowercase,
+            },
             "vocabulary": [
                 tokenizer.id_to_token[i] for i in range(len(tokenizer.vocab_map))
             ],
+            "tokenizer_backend": tokenizer.backend_state
+            if tokenizer.token_level == "bpe"
+            else None,
             "seq_len": seq_len,
             "epoch": epoch,
             "model_state_dict": model.state_dict(),

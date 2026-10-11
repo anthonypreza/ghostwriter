@@ -57,7 +57,17 @@ def comparison_group(run_dir, config, tokenizer, notes):
     digest = hashlib.sha256()
     digest.update(
         json.dumps(
-            {"tokens": tokens, "seq_len": seq_len, "evaluation": "nonoverlapping-v1"},
+            {
+                "tokens": tokens,
+                "seq_len": seq_len,
+                "evaluation": "nonoverlapping-v1",
+                "token_level": tokenizer.get("token_level", "word"),
+                "backend": tokenizer.get("backend"),
+                "section_tokens": tokenizer.get("section_tokens", True),
+                "lowercase": tokenizer.get(
+                    "lowercase", tokenizer.get("token_level", "word") == "word"
+                ),
+            },
             ensure_ascii=False,
             sort_keys=True,
         ).encode()
@@ -138,8 +148,10 @@ def inspect_run(run_dir):
     commands = {}
     if checkpoint and checkpoint.is_file() and tokenizer_path.is_file():
         common = f"--checkpoint {ps_quote(checkpoint)} --tokenizer {ps_quote(tokenizer_path)}"
+        prompt = " --prompt '<INTRO>'" if tokenizer.get("section_tokens", True) else ""
+        max_new_tokens = 1000 if tokenizer.get("token_level", "word") == "char" else 200
         commands = {
-            "generate": f"python -m ghostwriter.inference.generate {common} --prompt '<INTRO>' --max-new-tokens 200 --temperature 1.1",
+            "generate": f"python -m ghostwriter.inference.generate {common}{prompt} --max-new-tokens {max_new_tokens} --temperature 1.0 --top-k 40",
             "evaluate": f"python -m ghostwriter.training.eval {common} --data-dir {ps_quote(run_dir / 'processed')} --split test",
         }
     else:

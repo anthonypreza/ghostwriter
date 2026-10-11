@@ -39,20 +39,43 @@ RAW_DIR = Path(f"{CURRENT_DIR}/../../../data/raw")
 PROCESSED_DIR = Path(f"{CURRENT_DIR}/../../../data/processed")
 
 
-def clean_lyrics(text: str) -> str:
+def normalize_lyrics(text: str, strip=True) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip() if strip else text
+
+
+def clean_lyrics(text: str, section_tokens=True) -> str:
+    text = normalize_lyrics(text)
 
     cleaned_lines = []
 
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
         line = line.strip()
 
         if not line:
-            if cleaned_lines and cleaned_lines[-1] != "":
+            if not section_tokens or (cleaned_lines and cleaned_lines[-1] != ""):
                 cleaned_lines.append("")
             continue
 
         section = normalize_section(line)
+        if line in {f"<{name}>" for name, _ in SECTION_TYPES}:
+            section = line
+
+        if not section_tokens and (
+            section or (line.startswith("[") and line.endswith("]"))
+        ):
+            # Removing a label must not join two stanzas. Keep existing blank lines.
+            if (
+                cleaned_lines
+                and cleaned_lines[-1] != ""
+                and index + 1 < len(lines)
+                and lines[index + 1].strip()
+            ):
+                cleaned_lines.append("")
+            continue
 
         if section:
             cleaned_lines.append(section)
@@ -62,12 +85,12 @@ def clean_lyrics(text: str) -> str:
         else:
             cleaned_lines.append(line)
 
-    cleaned = "\n".join(cleaned_lines).strip()
+    cleaned = normalize_lyrics("\n".join(cleaned_lines))
 
     return f"<BOS>\n{cleaned}\n<EOS>"
 
 
-def prepare_corpus(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR):
+def prepare_corpus(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR, section_tokens=True):
     raw_dir = Path(raw_dir)
     processed_dir = Path(processed_dir)
     songs = sorted(raw_dir.glob("*.txt"))
@@ -79,9 +102,14 @@ def prepare_corpus(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR):
     splits = {"train": train_songs, "val": val_songs, "test": test_songs}
     # Read and clean every input before changing any previous output.
     cleaned_songs = {
-        path.name: clean_lyrics(path.read_text(encoding="utf-8")) for path in songs
+        path.name: clean_lyrics(path.read_text(encoding="utf-8"), section_tokens)
+        for path in songs
     }
-    manifest = {"random_state": 42}
+    manifest = {
+        "random_state": 42,
+        "section_tokens": section_tokens,
+        "max_consecutive_newlines": 2,
+    }
 
     for split, paths in splits.items():
         split_dir = processed_dir / split
@@ -104,4 +132,11 @@ def prepare_corpus(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR):
 
 
 if __name__ == "__main__":
-    prepare_corpus()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Clean lyrics and split by song.")
+    parser.add_argument(
+        "--section-tokens", action=argparse.BooleanOptionalAction, default=True
+    )
+    args = parser.parse_args()
+    prepare_corpus(section_tokens=args.section_tokens)

@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .tokenizer import Tokenizer
 
-SEQUENCE_LEN = 32
-STRIDE = 16
+SEQUENCE_LEN = 64
+STRIDE = 32
 PAD_TOKEN_ID = 0
 
 
