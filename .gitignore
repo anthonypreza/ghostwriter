@@ -15,3 +15,20 @@ runs/
 *.pt
 *.pth
 *.safetensors
+
+# Packaging, local caches, additional secrets and exported artifacts
+.env.*
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+*.onnx
+*.ckpt
+*.pkl
+node_modules/
+
+# Generated embedding visualizations (keep application HTML tracked)
+/outputs/
+ghostwriter_clusters.html
+clusters_*.html

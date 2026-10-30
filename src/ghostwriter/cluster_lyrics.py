@@ -22,6 +22,13 @@ def main():
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
     parser.add_argument("--tokenizer", default=DEFAULT_TOKENIZER)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--data-dir", type=Path, default=PROCESSED_DIR)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).resolve().parents[2] / "outputs" / "visualizations",
+        help="Directory for the generated interactive chart.",
+    )
     args = parser.parse_args()
 
     model, tokenizer = load_model(
@@ -31,9 +38,9 @@ def main():
     )
 
     song_dirs = [
-        PROCESSED_DIR / "train",
-        PROCESSED_DIR / "val",
-        PROCESSED_DIR / "test",
+        args.data_dir / "train",
+        args.data_dir / "val",
+        args.data_dir / "test",
     ]
 
     songs = []
@@ -51,7 +58,16 @@ def main():
             filenames.append(path.stem)
             splits.append(directory.name)
 
-    embeddings = np.stack([embed_song(model, tokenizer, song) for song in songs])
+    embeddings = np.stack([
+        embed_song(
+            model,
+            tokenizer,
+            song,
+            context_length=model.context_length or 128,
+            device_name=args.device,
+        )
+        for song in songs
+    ])
 
     # Cluster in the original 64-dimensional space.
     kmeans = KMeans(
@@ -131,7 +147,8 @@ def main():
         hovermode="closest",
     )
 
-    output_path = Path("ghostwriter_clusters.html")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = args.output_dir / "ghostwriter_clusters.html"
     fig.write_html(str(output_path), include_plotlyjs=True)
     fig.show()
 
